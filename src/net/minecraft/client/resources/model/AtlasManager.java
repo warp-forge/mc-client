@@ -1,0 +1,182 @@
+package net.minecraft.client.resources.model;
+
+import com.mojang.logging.LogUtils;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
+import net.minecraft.client.renderer.Sheets;
+import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
+import net.minecraft.client.renderer.texture.SpriteLoader;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.renderer.texture.TextureManager;
+import net.minecraft.client.resources.metadata.gui.GuiMetadataSection;
+import net.minecraft.data.AtlasIds;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.packs.metadata.MetadataSectionType;
+import net.minecraft.server.packs.resources.PreparableReloadListener;
+import net.minecraft.server.packs.resources.ResourceManager;
+import org.slf4j.Logger;
+
+public class AtlasManager implements AutoCloseable, PreparableReloadListener, MaterialSet {
+   private static final Logger LOGGER = LogUtils.getLogger();
+   private static final List KNOWN_ATLASES;
+   public static final PreparableReloadListener.StateKey PENDING_STITCH;
+   private final Map atlasByTexture = new HashMap();
+   private final Map atlasById = new HashMap();
+   private Map materialLookup = Map.of();
+   private int maxMipmapLevels;
+
+   public AtlasManager(final TextureManager textureManager, final int maxMipmapLevels) {
+      for(AtlasConfig info : KNOWN_ATLASES) {
+         TextureAtlas atlasTexture = new TextureAtlas(info.textureId);
+         textureManager.register(info.textureId, atlasTexture);
+         AtlasEntry atlasEntry = new AtlasEntry(atlasTexture, info);
+         this.atlasByTexture.put(info.textureId, atlasEntry);
+         this.atlasById.put(info.definitionLocation, atlasEntry);
+      }
+
+      this.maxMipmapLevels = maxMipmapLevels;
+   }
+
+   public TextureAtlas getAtlasOrThrow(final Identifier atlasId) {
+      AtlasEntry atlasEntry = (AtlasEntry)this.atlasById.get(atlasId);
+      if (atlasEntry == null) {
+         throw new IllegalArgumentException("Invalid atlas id: " + String.valueOf(atlasId));
+      } else {
+         return atlasEntry.atlas();
+      }
+   }
+
+   public void forEach(final BiConsumer output) {
+      this.atlasById.forEach((atlasId, entry) -> output.accept(atlasId, entry.atlas));
+   }
+
+   public void updateMaxMipLevel(final int maxMipmapLevels) {
+      this.maxMipmapLevels = maxMipmapLevels;
+   }
+
+   public void close() {
+      this.materialLookup = Map.of();
+      this.atlasById.values().forEach(AtlasEntry::close);
+      this.atlasById.clear();
+      this.atlasByTexture.clear();
+   }
+
+   public TextureAtlasSprite get(final Material material) {
+      TextureAtlasSprite result = (TextureAtlasSprite)this.materialLookup.get(material);
+      if (result != null) {
+         return result;
+      } else {
+         Identifier atlasTextureId = material.atlasLocation();
+         AtlasEntry atlasEntry = (AtlasEntry)this.atlasByTexture.get(atlasTextureId);
+         if (atlasEntry == null) {
+            throw new IllegalArgumentException("Invalid atlas texture id: " + String.valueOf(atlasTextureId));
+         } else {
+            return atlasEntry.atlas().missingSprite();
+         }
+      }
+   }
+
+   public void prepareSharedState(final PreparableReloadListener.SharedState currentReload) {
+      int atlasCount = this.atlasById.size();
+      List<PendingStitch> pendingStitches = new ArrayList(atlasCount);
+      Map<Identifier, CompletableFuture<SpriteLoader.Preparations>> pendingStitchById = new HashMap(atlasCount);
+      List<CompletableFuture<?>> readyForUploads = new ArrayList(atlasCount);
+      this.atlasById.forEach((atlasId, atlasEntry) -> {
+         CompletableFuture<SpriteLoader.Preparations> stitchingDone = new CompletableFuture();
+         pendingStitchById.put(atlasId, stitchingDone);
+         pendingStitches.add(new PendingStitch(atlasEntry, stitchingDone));
+         readyForUploads.add(stitchingDone.thenCompose(SpriteLoader.Preparations::readyForUpload));
+      });
+      CompletableFuture<?> allReadyForUploads = CompletableFuture.allOf((CompletableFuture[])readyForUploads.toArray((x$0) -> new CompletableFuture[x$0]));
+      currentReload.set(PENDING_STITCH, new PendingStitchResults(pendingStitches, pendingStitchById, allReadyForUploads));
+   }
+
+   public CompletableFuture reload(final PreparableReloadListener.SharedState currentReload, final Executor taskExecutor, final PreparableReloadListener.PreparationBarrier preparationBarrier, final Executor reloadExecutor) {
+      PendingStitchResults pendingStitches = (PendingStitchResults)currentReload.get(PENDING_STITCH);
+      ResourceManager resourceManager = currentReload.resourceManager();
+      pendingStitches.pendingStitches.forEach((pending) -> pending.entry.scheduleLoad(resourceManager, taskExecutor, this.maxMipmapLevels).whenComplete((value, throwable) -> {
+            if (value != null) {
+               pending.preparations.complete(value);
+            } else {
+               pending.preparations.completeExceptionally(throwable);
+            }
+
+         }));
+      CompletableFuture var10000 = pendingStitches.allReadyToUpload;
+      Objects.requireNonNull(preparationBarrier);
+      return var10000.thenCompose(preparationBarrier::wait).thenAcceptAsync((unused) -> this.updateSpriteMaps(pendingStitches), reloadExecutor);
+   }
+
+   private void updateSpriteMaps(final PendingStitchResults pendingStitches) {
+      this.materialLookup = pendingStitches.joinAndUpload();
+      Map<Identifier, TextureAtlasSprite> globalSpriteLookup = new HashMap();
+      this.materialLookup.forEach((material, sprite) -> {
+         if (!material.texture().equals(MissingTextureAtlasSprite.getLocation())) {
+            TextureAtlasSprite previous = (TextureAtlasSprite)globalSpriteLookup.putIfAbsent(material.texture(), sprite);
+            if (previous != null) {
+               LOGGER.warn("Duplicate sprite {} from atlas {}, already defined in atlas {}. This will be rejected in a future version", new Object[]{material.texture(), material.atlasLocation(), previous.atlasLocation()});
+            }
+         }
+
+      });
+   }
+
+   static {
+      KNOWN_ATLASES = List.of(new AtlasConfig(Sheets.ARMOR_TRIMS_SHEET, AtlasIds.ARMOR_TRIMS, false), new AtlasConfig(Sheets.BANNER_SHEET, AtlasIds.BANNER_PATTERNS, false), new AtlasConfig(Sheets.BED_SHEET, AtlasIds.BEDS, false), new AtlasConfig(TextureAtlas.LOCATION_BLOCKS, AtlasIds.BLOCKS, true), new AtlasConfig(TextureAtlas.LOCATION_ITEMS, AtlasIds.ITEMS, false), new AtlasConfig(Sheets.CHEST_SHEET, AtlasIds.CHESTS, false), new AtlasConfig(Sheets.DECORATED_POT_SHEET, AtlasIds.DECORATED_POT, false), new AtlasConfig(Sheets.GUI_SHEET, AtlasIds.GUI, false, Set.of(GuiMetadataSection.TYPE)), new AtlasConfig(Sheets.MAP_DECORATIONS_SHEET, AtlasIds.MAP_DECORATIONS, false), new AtlasConfig(Sheets.PAINTINGS_SHEET, AtlasIds.PAINTINGS, false), new AtlasConfig(TextureAtlas.LOCATION_PARTICLES, AtlasIds.PARTICLES, false), new AtlasConfig(Sheets.SHIELD_SHEET, AtlasIds.SHIELD_PATTERNS, false), new AtlasConfig(Sheets.SHULKER_SHEET, AtlasIds.SHULKER_BOXES, false), new AtlasConfig(Sheets.SIGN_SHEET, AtlasIds.SIGNS, false), new AtlasConfig(Sheets.CELESTIAL_SHEET, AtlasIds.CELESTIALS, false));
+      PENDING_STITCH = new PreparableReloadListener.StateKey();
+   }
+
+   private static record PendingStitch(AtlasEntry entry, CompletableFuture preparations) {
+      public void joinAndUpload(final Map result) {
+         SpriteLoader.Preparations preparations = (SpriteLoader.Preparations)this.preparations.join();
+         this.entry.atlas.upload(preparations);
+         preparations.regions().forEach((spriteId, spriteContents) -> result.put(new Material(this.entry.config.textureId, spriteId), spriteContents));
+      }
+   }
+
+   private static record AtlasEntry(TextureAtlas atlas, AtlasConfig config) implements AutoCloseable {
+      public void close() {
+         this.atlas.clearTextureData();
+      }
+
+      private CompletableFuture scheduleLoad(final ResourceManager resourceManager, final Executor executor, final int maxMipmapLevels) {
+         return SpriteLoader.create(this.atlas).loadAndStitch(resourceManager, this.config.definitionLocation, this.config.createMipmaps ? maxMipmapLevels : 0, executor, this.config.additionalMetadata);
+      }
+   }
+
+   public static record AtlasConfig(Identifier textureId, Identifier definitionLocation, boolean createMipmaps, Set additionalMetadata) {
+      public AtlasConfig(final Identifier textureId, final Identifier definitionLocation, final boolean createMipmaps) {
+         this(textureId, definitionLocation, createMipmaps, Set.of());
+      }
+   }
+
+   public static class PendingStitchResults {
+      private final List pendingStitches;
+      private final Map stitchFuturesById;
+      private final CompletableFuture allReadyToUpload;
+
+      private PendingStitchResults(final List pendingStitches, final Map stitchFuturesById, final CompletableFuture allReadyToUpload) {
+         this.pendingStitches = pendingStitches;
+         this.stitchFuturesById = stitchFuturesById;
+         this.allReadyToUpload = allReadyToUpload;
+      }
+
+      public Map joinAndUpload() {
+         Map<Material, TextureAtlasSprite> result = new HashMap();
+         this.pendingStitches.forEach((pendingStitch) -> pendingStitch.joinAndUpload(result));
+         return result;
+      }
+
+      public CompletableFuture get(final Identifier atlasId) {
+         return (CompletableFuture)Objects.requireNonNull((CompletableFuture)this.stitchFuturesById.get(atlasId));
+      }
+   }
+}

@@ -1,1 +1,1 @@
-# mc-client
+mc-client 26.1-snapshot5

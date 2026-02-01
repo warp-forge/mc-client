@@ -1,0 +1,24 @@
+package net.minecraft.world.item.enchantment;
+
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.minecraft.core.HolderSet;
+import net.minecraft.core.RegistryCodecs;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+
+public record Repairable(HolderSet items) {
+   public static final Codec CODEC = RecordCodecBuilder.create((i) -> i.group(RegistryCodecs.homogeneousList(Registries.ITEM).fieldOf("items").forGetter(Repairable::items)).apply(i, Repairable::new));
+   public static final StreamCodec STREAM_CODEC;
+
+   public boolean isValidRepairItem(final ItemStack repairItemStack) {
+      return repairItemStack.is(this.items);
+   }
+
+   static {
+      STREAM_CODEC = StreamCodec.composite(ByteBufCodecs.holderSet(Registries.ITEM), Repairable::items, Repairable::new);
+   }
+}

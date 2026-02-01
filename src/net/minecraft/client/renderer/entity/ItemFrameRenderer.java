@@ -1,0 +1,143 @@
+package net.minecraft.client.renderer.entity;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.MapRenderer;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.block.BlockRenderDispatcher;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
+import net.minecraft.client.renderer.entity.state.ItemFrameRenderState;
+import net.minecraft.client.renderer.item.ItemModelResolver;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.state.CameraRenderState;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.resources.model.BlockStateDefinitions;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.saveddata.maps.MapId;
+import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+import net.minecraft.world.phys.Vec3;
+import org.joml.Quaternionfc;
+
+public class ItemFrameRenderer extends EntityRenderer {
+   public static final int GLOW_FRAME_BRIGHTNESS = 5;
+   public static final int BRIGHT_MAP_LIGHT_ADJUSTMENT = 30;
+   private final ItemModelResolver itemModelResolver;
+   private final MapRenderer mapRenderer;
+   private final BlockRenderDispatcher blockRenderer;
+
+   public ItemFrameRenderer(final EntityRendererProvider.Context context) {
+      super(context);
+      this.itemModelResolver = context.getItemModelResolver();
+      this.mapRenderer = context.getMapRenderer();
+      this.blockRenderer = context.getBlockRenderDispatcher();
+   }
+
+   protected int getBlockLightLevel(final ItemFrame entity, final BlockPos blockPos) {
+      return entity.is(EntityType.GLOW_ITEM_FRAME) ? Math.max(5, super.getBlockLightLevel(entity, blockPos)) : super.getBlockLightLevel(entity, blockPos);
+   }
+
+   public void submit(final ItemFrameRenderState state, final PoseStack poseStack, final SubmitNodeCollector submitNodeCollector, final CameraRenderState camera) {
+      super.submit(state, poseStack, submitNodeCollector, camera);
+      poseStack.pushPose();
+      Direction direction = state.direction;
+      Vec3 renderOffset = this.getRenderOffset(state);
+      poseStack.translate(-renderOffset.x(), -renderOffset.y(), -renderOffset.z());
+      double offs = (double)0.46875F;
+      poseStack.translate((double)direction.getStepX() * (double)0.46875F, (double)direction.getStepY() * (double)0.46875F, (double)direction.getStepZ() * (double)0.46875F);
+      float xRot;
+      float yRot;
+      if (direction.getAxis().isHorizontal()) {
+         xRot = 0.0F;
+         yRot = 180.0F - direction.toYRot();
+      } else {
+         xRot = (float)(-90 * direction.getAxisDirection().getStep());
+         yRot = 180.0F;
+      }
+
+      poseStack.mulPose((Quaternionfc)Axis.XP.rotationDegrees(xRot));
+      poseStack.mulPose((Quaternionfc)Axis.YP.rotationDegrees(yRot));
+      if (!state.isInvisible) {
+         BlockState fakeBlockState = BlockStateDefinitions.getItemFrameFakeState(state.isGlowFrame, state.mapId != null);
+         BlockStateModel blockModel = this.blockRenderer.getBlockModel(fakeBlockState);
+         poseStack.pushPose();
+         poseStack.translate(-0.5F, -0.5F, -0.5F);
+         submitNodeCollector.submitBlockModel(poseStack, RenderTypes.entitySolidZOffsetForward(TextureAtlas.LOCATION_BLOCKS), blockModel, 1.0F, 1.0F, 1.0F, state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
+         poseStack.popPose();
+      }
+
+      if (state.isInvisible) {
+         poseStack.translate(0.0F, 0.0F, 0.5F);
+      } else {
+         poseStack.translate(0.0F, 0.0F, 0.4375F);
+      }
+
+      if (state.mapId != null) {
+         int rotation = state.rotation % 4 * 2;
+         poseStack.mulPose((Quaternionfc)Axis.ZP.rotationDegrees((float)rotation * 360.0F / 8.0F));
+         poseStack.mulPose((Quaternionfc)Axis.ZP.rotationDegrees(180.0F));
+         float s = 0.0078125F;
+         poseStack.scale(0.0078125F, 0.0078125F, 0.0078125F);
+         poseStack.translate(-64.0F, -64.0F, 0.0F);
+         poseStack.translate(0.0F, 0.0F, -1.0F);
+         int lightCoords = this.getLightCoords(state.isGlowFrame, 15728850, state.lightCoords);
+         this.mapRenderer.render(state.mapRenderState, poseStack, submitNodeCollector, true, lightCoords);
+      } else if (!state.item.isEmpty()) {
+         poseStack.mulPose((Quaternionfc)Axis.ZP.rotationDegrees((float)state.rotation * 360.0F / 8.0F));
+         int lightVal = this.getLightCoords(state.isGlowFrame, 15728880, state.lightCoords);
+         poseStack.scale(0.5F, 0.5F, 0.5F);
+         state.item.submit(poseStack, submitNodeCollector, lightVal, OverlayTexture.NO_OVERLAY, state.outlineColor);
+      }
+
+      poseStack.popPose();
+   }
+
+   private int getLightCoords(final boolean isGlowFrame, final int glowLightCoords, final int originalLightCoords) {
+      return isGlowFrame ? glowLightCoords : originalLightCoords;
+   }
+
+   public Vec3 getRenderOffset(final ItemFrameRenderState state) {
+      return new Vec3((double)((float)state.direction.getStepX() * 0.3F), (double)-0.25F, (double)((float)state.direction.getStepZ() * 0.3F));
+   }
+
+   protected boolean shouldShowName(final ItemFrame entity, final double distanceToCameraSq) {
+      return Minecraft.renderNames() && this.entityRenderDispatcher.crosshairPickEntity == entity && entity.getItem().getCustomName() != null;
+   }
+
+   protected Component getNameTag(final ItemFrame entity) {
+      return entity.getItem().getHoverName();
+   }
+
+   public ItemFrameRenderState createRenderState() {
+      return new ItemFrameRenderState();
+   }
+
+   public void extractRenderState(final ItemFrame entity, final ItemFrameRenderState state, final float partialTicks) {
+      super.extractRenderState(entity, state, partialTicks);
+      state.direction = entity.getDirection();
+      ItemStack itemStack = entity.getItem();
+      this.itemModelResolver.updateForNonLiving(state.item, itemStack, ItemDisplayContext.FIXED, entity);
+      state.rotation = entity.getRotation();
+      state.isGlowFrame = entity.is(EntityType.GLOW_ITEM_FRAME);
+      state.mapId = null;
+      if (!itemStack.isEmpty()) {
+         MapId framedMapId = entity.getFramedMapId(itemStack);
+         if (framedMapId != null) {
+            MapItemSavedData mapData = entity.level().getMapData(framedMapId);
+            if (mapData != null) {
+               this.mapRenderer.extractRenderState(framedMapId, mapData, state.mapRenderState);
+               state.mapId = framedMapId;
+            }
+         }
+      }
+
+   }
+}

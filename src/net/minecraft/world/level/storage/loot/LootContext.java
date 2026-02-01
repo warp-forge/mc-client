@@ -1,0 +1,222 @@
+package net.minecraft.world.level.storage.loot;
+
+import com.google.common.collect.Sets;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Consumer;
+import net.minecraft.core.HolderGetter;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.RandomSource;
+import net.minecraft.util.StringRepresentable;
+import net.minecraft.util.context.ContextKey;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.ItemInstance;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.storage.loot.functions.LootItemFunction;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+import net.minecraft.world.level.storage.loot.predicates.LootItemCondition;
+import org.jspecify.annotations.Nullable;
+
+public class LootContext {
+   private final LootParams params;
+   private final RandomSource random;
+   private final HolderGetter.Provider lootDataResolver;
+   private final Set visitedElements = Sets.newLinkedHashSet();
+
+   private LootContext(final LootParams params, final RandomSource random, final HolderGetter.Provider lootDataResolver) {
+      this.params = params;
+      this.random = random;
+      this.lootDataResolver = lootDataResolver;
+   }
+
+   public boolean hasParameter(final ContextKey key) {
+      return this.params.contextMap().has(key);
+   }
+
+   public Object getParameter(final ContextKey key) {
+      return this.params.contextMap().getOrThrow(key);
+   }
+
+   public @Nullable Object getOptionalParameter(final ContextKey key) {
+      return this.params.contextMap().getOptional(key);
+   }
+
+   public void addDynamicDrops(final Identifier location, final Consumer output) {
+      this.params.addDynamicDrops(location, output);
+   }
+
+   public boolean hasVisitedElement(final VisitedEntry element) {
+      return this.visitedElements.contains(element);
+   }
+
+   public boolean pushVisitedElement(final VisitedEntry element) {
+      return this.visitedElements.add(element);
+   }
+
+   public void popVisitedElement(final VisitedEntry element) {
+      this.visitedElements.remove(element);
+   }
+
+   public HolderGetter.Provider getResolver() {
+      return this.lootDataResolver;
+   }
+
+   public RandomSource getRandom() {
+      return this.random;
+   }
+
+   public float getLuck() {
+      return this.params.getLuck();
+   }
+
+   public ServerLevel getLevel() {
+      return this.params.getLevel();
+   }
+
+   public static VisitedEntry createVisitedEntry(final LootTable table) {
+      return new VisitedEntry(LootDataType.TABLE, table);
+   }
+
+   public static VisitedEntry createVisitedEntry(final LootItemCondition table) {
+      return new VisitedEntry(LootDataType.PREDICATE, table);
+   }
+
+   public static VisitedEntry createVisitedEntry(final LootItemFunction table) {
+      return new VisitedEntry(LootDataType.MODIFIER, table);
+   }
+
+   public static class Builder {
+      private final LootParams params;
+      private @Nullable RandomSource random;
+
+      public Builder(final LootParams params) {
+         this.params = params;
+      }
+
+      public Builder withOptionalRandomSeed(final long seed) {
+         if (seed != 0L) {
+            this.random = RandomSource.create(seed);
+         }
+
+         return this;
+      }
+
+      public Builder withOptionalRandomSource(final RandomSource randomSource) {
+         this.random = randomSource;
+         return this;
+      }
+
+      public ServerLevel getLevel() {
+         return this.params.getLevel();
+      }
+
+      public LootContext create(final Optional randomSequenceKey) {
+         ServerLevel level = this.getLevel();
+         MinecraftServer server = level.getServer();
+         Optional var10000 = Optional.ofNullable(this.random).or(() -> {
+            Objects.requireNonNull(level);
+            return randomSequenceKey.map(level::getRandomSequence);
+         });
+         Objects.requireNonNull(level);
+         RandomSource random = (RandomSource)var10000.orElseGet(level::getRandom);
+         return new LootContext(this.params, random, server.reloadableRegistries().lookup());
+      }
+   }
+
+   public static enum EntityTarget implements StringRepresentable, LootContextArg.SimpleGetter {
+      THIS("this", LootContextParams.THIS_ENTITY),
+      ATTACKER("attacker", LootContextParams.ATTACKING_ENTITY),
+      DIRECT_ATTACKER("direct_attacker", LootContextParams.DIRECT_ATTACKING_ENTITY),
+      ATTACKING_PLAYER("attacking_player", LootContextParams.LAST_DAMAGE_PLAYER),
+      TARGET_ENTITY("target_entity", LootContextParams.TARGET_ENTITY),
+      INTERACTING_ENTITY("interacting_entity", LootContextParams.INTERACTING_ENTITY);
+
+      public static final StringRepresentable.EnumCodec CODEC = StringRepresentable.fromEnum(EntityTarget::values);
+      private final String name;
+      private final ContextKey param;
+
+      private EntityTarget(final String name, final ContextKey param) {
+         this.name = name;
+         this.param = param;
+      }
+
+      public ContextKey contextParam() {
+         return this.param;
+      }
+
+      public static EntityTarget getByName(final String name) {
+         EntityTarget target = (EntityTarget)CODEC.byName(name);
+         if (target != null) {
+            return target;
+         } else {
+            throw new IllegalArgumentException("Invalid entity target " + name);
+         }
+      }
+
+      public String getSerializedName() {
+         return this.name;
+      }
+
+      // $FF: synthetic method
+      private static EntityTarget[] $values() {
+         return new EntityTarget[]{THIS, ATTACKER, DIRECT_ATTACKER, ATTACKING_PLAYER, TARGET_ENTITY, INTERACTING_ENTITY};
+      }
+   }
+
+   public static enum BlockEntityTarget implements StringRepresentable, LootContextArg.SimpleGetter {
+      BLOCK_ENTITY("block_entity", LootContextParams.BLOCK_ENTITY);
+
+      private final String name;
+      private final ContextKey param;
+
+      private BlockEntityTarget(final String name, final ContextKey param) {
+         this.name = name;
+         this.param = param;
+      }
+
+      public ContextKey contextParam() {
+         return this.param;
+      }
+
+      public String getSerializedName() {
+         return this.name;
+      }
+
+      // $FF: synthetic method
+      private static BlockEntityTarget[] $values() {
+         return new BlockEntityTarget[]{BLOCK_ENTITY};
+      }
+   }
+
+   public static enum ItemStackTarget implements StringRepresentable, LootContextArg.SimpleGetter {
+      TOOL("tool", LootContextParams.TOOL);
+
+      private final String name;
+      private final ContextKey param;
+
+      private ItemStackTarget(final String name, final ContextKey param) {
+         this.name = name;
+         this.param = param;
+      }
+
+      public ContextKey contextParam() {
+         return this.param;
+      }
+
+      public String getSerializedName() {
+         return this.name;
+      }
+
+      // $FF: synthetic method
+      private static ItemStackTarget[] $values() {
+         return new ItemStackTarget[]{TOOL};
+      }
+   }
+
+   public static record VisitedEntry(LootDataType type, Validatable value) {
+   }
+}

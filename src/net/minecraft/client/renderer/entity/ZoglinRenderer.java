@@ -1,0 +1,17 @@
+package net.minecraft.client.renderer.entity;
+
+import net.minecraft.client.model.geom.ModelLayers;
+import net.minecraft.client.renderer.entity.state.HoglinRenderState;
+import net.minecraft.resources.Identifier;
+
+public class ZoglinRenderer extends AbstractHoglinRenderer {
+   private static final Identifier ZOGLIN_LOCATION = Identifier.withDefaultNamespace("textures/entity/hoglin/zoglin.png");
+
+   public ZoglinRenderer(final EntityRendererProvider.Context context) {
+      super(context, ModelLayers.ZOGLIN, ModelLayers.ZOGLIN_BABY, 0.7F);
+   }
+
+   public Identifier getTextureLocation(final HoglinRenderState state) {
+      return ZOGLIN_LOCATION;
+   }
+}

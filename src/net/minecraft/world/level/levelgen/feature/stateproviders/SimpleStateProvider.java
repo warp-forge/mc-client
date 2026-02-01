@@ -1,0 +1,27 @@
+package net.minecraft.world.level.levelgen.feature.stateproviders;
+
+import com.mojang.serialization.MapCodec;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.state.BlockState;
+
+public class SimpleStateProvider extends BlockStateProvider {
+   public static final MapCodec CODEC;
+   private final BlockState state;
+
+   protected SimpleStateProvider(final BlockState state) {
+      this.state = state;
+   }
+
+   protected BlockStateProviderType type() {
+      return BlockStateProviderType.SIMPLE_STATE_PROVIDER;
+   }
+
+   public BlockState getState(final RandomSource random, final BlockPos pos) {
+      return this.state;
+   }
+
+   static {
+      CODEC = BlockState.CODEC.fieldOf("state").xmap(SimpleStateProvider::new, (p) -> p.state);
+   }
+}

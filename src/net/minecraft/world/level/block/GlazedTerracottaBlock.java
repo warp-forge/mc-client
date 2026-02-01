@@ -1,0 +1,27 @@
+package net.minecraft.world.level.block;
+
+import com.mojang.serialization.MapCodec;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+
+public class GlazedTerracottaBlock extends HorizontalDirectionalBlock {
+   public static final MapCodec CODEC = simpleCodec(GlazedTerracottaBlock::new);
+
+   public MapCodec codec() {
+      return CODEC;
+   }
+
+   public GlazedTerracottaBlock(final BlockBehaviour.Properties properties) {
+      super(properties);
+   }
+
+   protected void createBlockStateDefinition(final StateDefinition.Builder builder) {
+      builder.add(FACING);
+   }
+
+   public BlockState getStateForPlacement(final BlockPlaceContext context) {
+      return (BlockState)this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+   }
+}

@@ -1,0 +1,247 @@
+package net.minecraft.client.renderer.item;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.block.model.ItemTransform;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.special.SpecialModelRenderer;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.phys.AABB;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
+import org.joml.Vector3fc;
+import org.jspecify.annotations.Nullable;
+
+public class ItemStackRenderState {
+   ItemDisplayContext displayContext;
+   private int activeLayerCount;
+   private boolean animated;
+   private boolean oversizedInGui;
+   private @Nullable AABB cachedModelBoundingBox;
+   private LayerRenderState[] layers;
+
+   public ItemStackRenderState() {
+      this.displayContext = ItemDisplayContext.NONE;
+      this.layers = new LayerRenderState[]{new LayerRenderState()};
+   }
+
+   public void ensureCapacity(final int requestedCount) {
+      int currentCapacity = this.layers.length;
+      int requiredNewCapacity = this.activeLayerCount + requestedCount;
+      if (requiredNewCapacity > currentCapacity) {
+         this.layers = (LayerRenderState[])Arrays.copyOf(this.layers, requiredNewCapacity);
+
+         for(int i = currentCapacity; i < requiredNewCapacity; ++i) {
+            this.layers[i] = new LayerRenderState();
+         }
+      }
+
+   }
+
+   public LayerRenderState newLayer() {
+      this.ensureCapacity(1);
+      return this.layers[this.activeLayerCount++];
+   }
+
+   public void clear() {
+      this.displayContext = ItemDisplayContext.NONE;
+
+      for(int i = 0; i < this.activeLayerCount; ++i) {
+         this.layers[i].clear();
+      }
+
+      this.activeLayerCount = 0;
+      this.animated = false;
+      this.oversizedInGui = false;
+      this.cachedModelBoundingBox = null;
+   }
+
+   public void setAnimated() {
+      this.animated = true;
+   }
+
+   public boolean isAnimated() {
+      return this.animated;
+   }
+
+   public void appendModelIdentityElement(final Object element) {
+   }
+
+   private LayerRenderState firstLayer() {
+      return this.layers[0];
+   }
+
+   public boolean isEmpty() {
+      return this.activeLayerCount == 0;
+   }
+
+   public boolean usesBlockLight() {
+      return this.firstLayer().usesBlockLight;
+   }
+
+   public @Nullable TextureAtlasSprite pickParticleIcon(final RandomSource randomSource) {
+      return this.activeLayerCount == 0 ? null : this.layers[randomSource.nextInt(this.activeLayerCount)].particleIcon;
+   }
+
+   public void visitExtents(final Consumer output) {
+      Vector3f scratch = new Vector3f();
+      PoseStack.Pose pose = new PoseStack.Pose();
+
+      for(int i = 0; i < this.activeLayerCount; ++i) {
+         LayerRenderState layer = this.layers[i];
+         layer.transform.apply(this.displayContext.leftHand(), pose);
+         Matrix4f poseTransform = pose.pose();
+         Vector3fc[] layerExtents = (Vector3fc[])layer.extents.get();
+
+         for(Vector3fc extent : layerExtents) {
+            output.accept(scratch.set(extent).mulPosition(poseTransform));
+         }
+
+         pose.setIdentity();
+      }
+
+   }
+
+   public void submit(final PoseStack poseStack, final SubmitNodeCollector submitNodeCollector, final int lightCoords, final int overlayCoords, final int outlineColor) {
+      for(int i = 0; i < this.activeLayerCount; ++i) {
+         this.layers[i].submit(poseStack, submitNodeCollector, lightCoords, overlayCoords, outlineColor);
+      }
+
+   }
+
+   public AABB getModelBoundingBox() {
+      if (this.cachedModelBoundingBox != null) {
+         return this.cachedModelBoundingBox;
+      } else {
+         AABB.Builder collector = new AABB.Builder();
+         Objects.requireNonNull(collector);
+         this.visitExtents(collector::include);
+         AABB aabb = collector.build();
+         this.cachedModelBoundingBox = aabb;
+         return aabb;
+      }
+   }
+
+   public void setOversizedInGui(final boolean oversizedInGui) {
+      this.oversizedInGui = oversizedInGui;
+   }
+
+   public boolean isOversizedInGui() {
+      return this.oversizedInGui;
+   }
+
+   public static enum FoilType {
+      NONE,
+      STANDARD,
+      SPECIAL;
+
+      // $FF: synthetic method
+      private static FoilType[] $values() {
+         return new FoilType[]{NONE, STANDARD, SPECIAL};
+      }
+   }
+
+   public class LayerRenderState {
+      private static final Vector3fc[] NO_EXTENTS = new Vector3fc[0];
+      public static final Supplier NO_EXTENTS_SUPPLIER = () -> NO_EXTENTS;
+      private final List quads;
+      private boolean usesBlockLight;
+      private @Nullable TextureAtlasSprite particleIcon;
+      private ItemTransform transform;
+      private @Nullable RenderType renderType;
+      private FoilType foilType;
+      private int[] tintLayers;
+      private @Nullable SpecialModelRenderer specialRenderer;
+      private @Nullable Object argumentForSpecialRendering;
+      private Supplier extents;
+
+      public LayerRenderState() {
+         Objects.requireNonNull(ItemStackRenderState.this);
+         super();
+         this.quads = new ArrayList();
+         this.transform = ItemTransform.NO_TRANSFORM;
+         this.foilType = ItemStackRenderState.FoilType.NONE;
+         this.tintLayers = new int[0];
+         this.extents = NO_EXTENTS_SUPPLIER;
+      }
+
+      public void clear() {
+         this.quads.clear();
+         this.renderType = null;
+         this.foilType = ItemStackRenderState.FoilType.NONE;
+         this.specialRenderer = null;
+         this.argumentForSpecialRendering = null;
+         Arrays.fill(this.tintLayers, -1);
+         this.usesBlockLight = false;
+         this.particleIcon = null;
+         this.transform = ItemTransform.NO_TRANSFORM;
+         this.extents = NO_EXTENTS_SUPPLIER;
+      }
+
+      public List prepareQuadList() {
+         return this.quads;
+      }
+
+      public void setRenderType(final RenderType renderType) {
+         this.renderType = renderType;
+      }
+
+      public void setUsesBlockLight(final boolean usesBlockLight) {
+         this.usesBlockLight = usesBlockLight;
+      }
+
+      public void setExtents(final Supplier extents) {
+         this.extents = extents;
+      }
+
+      public void setParticleIcon(final TextureAtlasSprite particleIcon) {
+         this.particleIcon = particleIcon;
+      }
+
+      public void setTransform(final ItemTransform transform) {
+         this.transform = transform;
+      }
+
+      public void setupSpecialModel(final SpecialModelRenderer renderer, final @Nullable Object argument) {
+         this.specialRenderer = eraseSpecialRenderer(renderer);
+         this.argumentForSpecialRendering = argument;
+      }
+
+      private static SpecialModelRenderer eraseSpecialRenderer(final SpecialModelRenderer renderer) {
+         return renderer;
+      }
+
+      public void setFoilType(final FoilType foilType) {
+         this.foilType = foilType;
+      }
+
+      public int[] prepareTintLayers(final int activeTints) {
+         if (activeTints > this.tintLayers.length) {
+            this.tintLayers = new int[activeTints];
+            Arrays.fill(this.tintLayers, -1);
+         }
+
+         return this.tintLayers;
+      }
+
+      private void submit(final PoseStack poseStack, final SubmitNodeCollector submitNodeCollector, final int lightCoords, final int overlayCoords, final int outlineColor) {
+         poseStack.pushPose();
+         this.transform.apply(ItemStackRenderState.this.displayContext.leftHand(), poseStack.last());
+         if (this.specialRenderer != null) {
+            this.specialRenderer.submit(this.argumentForSpecialRendering, ItemStackRenderState.this.displayContext, poseStack, submitNodeCollector, lightCoords, overlayCoords, this.foilType != ItemStackRenderState.FoilType.NONE, outlineColor);
+         } else if (this.renderType != null) {
+            submitNodeCollector.submitItem(poseStack, ItemStackRenderState.this.displayContext, lightCoords, overlayCoords, outlineColor, this.tintLayers, this.quads, this.renderType, this.foilType);
+         }
+
+         poseStack.popPose();
+      }
+   }
+}

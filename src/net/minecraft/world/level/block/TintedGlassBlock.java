@@ -1,0 +1,25 @@
+package net.minecraft.world.level.block;
+
+import com.mojang.serialization.MapCodec;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.minecraft.world.level.block.state.BlockState;
+
+public class TintedGlassBlock extends TransparentBlock {
+   public static final MapCodec CODEC = simpleCodec(TintedGlassBlock::new);
+
+   public MapCodec codec() {
+      return CODEC;
+   }
+
+   public TintedGlassBlock(final BlockBehaviour.Properties properties) {
+      super(properties);
+   }
+
+   protected boolean propagatesSkylightDown(final BlockState state) {
+      return false;
+   }
+
+   protected int getLightBlock(final BlockState state) {
+      return 15;
+   }
+}
